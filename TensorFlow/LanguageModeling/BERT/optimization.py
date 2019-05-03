@@ -20,6 +20,9 @@ from __future__ import print_function
 
 import re
 import tensorflow as tf
+from gradientcheckpointing import memory_saving_gradients
+# monkey patch tf.gradients to point to our custom version, with automatic checkpoint selection
+tf.__dict__["gradients"] = memory_saving_gradients.gradients_memory
 
 
 def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu, hvd=None, use_fp16=False, amp=False):
@@ -84,7 +87,9 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu, 
             optimizer = tf.contrib.mixed_precision.LossScaleOptimizer(optimizer, loss_scale_manager)
 
     tvars = tf.trainable_variables()
-    grads_and_vars = optimizer.compute_gradients(loss, tvars)
+    # grads_and_vars = optimizer.compute_gradients(loss, tvars)
+    grads = tf.gradients(loss, tf.trainable_variables())
+    grads_and_vars = list(zip(grads, tf.trainable_variables()))
     grads_and_vars = [(g, v) for g, v in grads_and_vars if g is not None]
     grads, tvars = list(zip(*grads_and_vars))
     all_are_finite = tf.reduce_all([tf.reduce_all(tf.is_finite(g)) for g in grads]) if use_fp16 or amp else tf.constant(
