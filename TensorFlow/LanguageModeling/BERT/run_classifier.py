@@ -831,6 +831,7 @@ def main(_):
             FLAGS.tpu_name, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
 
     config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
     if FLAGS.use_xla:
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
     is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
