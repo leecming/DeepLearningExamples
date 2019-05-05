@@ -9,8 +9,7 @@ __pycache__/
 *.so
 
 #Data
-data/*/*/
-data/*/*.zip
+data/
 
 
 # Distribution / packaging
