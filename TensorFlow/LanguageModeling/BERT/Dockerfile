@@ -1,10 +1,12 @@
 ARG FROM_IMAGE_NAME=nvcr.io/nvidia/tensorflow:19.04-py3
 FROM ${FROM_IMAGE_NAME}
+ENV LANG C.UTF-8
+ENV LC_ALL C.UTF-8
 
 RUN apt-get update && apt-get install -y pbzip2 pv bzip2
 
 RUN pip install toposort networkx pytest nltk tqdm html2text progressbar
-RUN pip install gensim nltk pandas subword-nmt tqdm sklearn tensorflow-hub
+RUN pip install gensim nltk pandas subword-nmt tqdm sklearn tensorflow-hub tables
 
 WORKDIR /workspace/bert
 RUN git clone https://github.com/openai/gradient-checkpointing.git gradientcheckpointing
