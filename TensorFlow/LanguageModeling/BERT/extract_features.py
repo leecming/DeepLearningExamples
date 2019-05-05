@@ -23,6 +23,10 @@ import collections
 import json
 import re
 
+import tables
+import numpy as np
+import pandas as pd
+
 import modeling
 import tokenization
 import tensorflow as tf
@@ -198,7 +202,8 @@ def model_fn_builder(bert_config, init_checkpoint, layer_indexes, use_tpu,
         }
 
         for (i, layer_index) in enumerate(layer_indexes):
-            predictions["layer_output_%d" % i] = all_layers[layer_index]
+            # try only getting hidden layer outputs for first token
+            predictions["layer_output_%d" % i] = tf.squeeze(all_layers[layer_index][:, 0:1, :], axis=1)
 
         output_spec = tf.contrib.tpu.TPUEstimatorSpec(
             mode=mode, predictions=predictions, scaffold_fn=scaffold_fn)
@@ -340,6 +345,14 @@ def read_examples(input_file):
     return examples
 
 
+def read_toxic_comments(input_file):
+    """Convert toxic comments CSVs into InputExamples"""
+    raw_toxic_df = pd.read_csv(input_file, encoding='utf-8')
+    return [InputExample(unique_id=row.Index,
+                         text_a=row.comment_text,
+                         text_b=None) for row in raw_toxic_df.itertuples()]
+
+
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -357,7 +370,8 @@ def main(_):
             num_shards=FLAGS.num_tpu_cores,
             per_host_input_for_training=is_per_host))
 
-    examples = read_examples(FLAGS.input_file)
+    # examples = read_examples(FLAGS.input_file)
+    examples = read_toxic_comments(FLAGS.input_file)
 
     features = convert_examples_to_features(
         examples=examples, seq_length=FLAGS.max_seq_length, tokenizer=tokenizer)
@@ -384,30 +398,21 @@ def main(_):
     input_fn = input_fn_builder(
         features=features, seq_length=FLAGS.max_seq_length)
 
-    with codecs.getwriter("utf-8")(tf.gfile.Open(FLAGS.output_file,
-                                                 "w")) as writer:
+    # Use pytables and h5 format to save to reduce storage sizes
+    # We're also only taking the hidden layer outputs for the 1st token from each sequence for the same reason
+    # 150K samples * 96 max_seq_len * 768 hidden layer size * 4 layers would be crazy to serialize
+    with tables.open_file(FLAGS.output_file, mode='w') as f:
+        array_c = f.create_earray(f.root, 'data', tables.Float32Atom(), (0, 1024 * 4, ))
+        curr_sample_num = 0
+
         for result in estimator.predict(input_fn, yield_single_examples=True):
-            unique_id = int(result["unique_id"])
-            feature = unique_id_to_feature[unique_id]
-            output_json = collections.OrderedDict()
-            output_json["linex_index"] = unique_id
-            all_features = []
-            for (i, token) in enumerate(feature.tokens):
-                all_layers = []
-                for (j, layer_index) in enumerate(layer_indexes):
-                    layer_output = result["layer_output_%d" % j]
-                    layers = collections.OrderedDict()
-                    layers["index"] = layer_index
-                    layers["values"] = [
-                        round(float(x), 6) for x in layer_output[i:(i + 1)].flat
-                    ]
-                    all_layers.append(layers)
-                features = collections.OrderedDict()
-                features["token"] = token
-                features["layers"] = all_layers
-                all_features.append(features)
-            output_json["features"] = all_features
-            writer.write(json.dumps(output_json) + "\n")
+            if curr_sample_num % 1000 == 0:
+                print('Sample num {}'.format(curr_sample_num))
+            sample_features = np.concatenate([result['layer_output_{}'.format(i)]
+                                              for i in range(len(layer_indexes))])
+            sample_features = sample_features[np.newaxis, :]
+            array_c.append(sample_features)
+            curr_sample_num += 1
 
 
 if __name__ == "__main__":
