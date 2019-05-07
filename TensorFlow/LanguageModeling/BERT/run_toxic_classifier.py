@@ -137,13 +137,11 @@ class InputFeatures(object):
                  input_ids,
                  input_mask,
                  segment_ids,
-                 label_id,
-                 is_real_example=True):
+                 label_id):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_id = label_id
-        self.is_real_example = is_real_example
 
 
 class ToxicProcessor:
@@ -271,8 +269,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
         input_ids=input_ids,
         input_mask=input_mask,
         segment_ids=segment_ids,
-        label_id=label_id,
-        is_real_example=True)
+        label_id=label_id)
     return feature
 
 
@@ -298,8 +295,6 @@ def file_based_convert_examples_to_features(
         features["input_mask"] = create_int_feature(feature.input_mask)
         features["segment_ids"] = create_int_feature(feature.segment_ids)
         features["label_ids"] = create_int_feature([feature.label_id])
-        features["is_real_example"] = create_int_feature(
-            [int(feature.is_real_example)])
 
         tf_example = tf.train.Example(features=tf.train.Features(feature=features))
         writer.write(tf_example.SerializeToString())
@@ -315,7 +310,6 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
         "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
         "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
         "label_ids": tf.FixedLenFeature([], tf.int64),
-        "is_real_example": tf.FixedLenFeature([], tf.int64),
     }
 
     def _decode_record(record, name_to_features):
@@ -340,7 +334,7 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
         d = tf.data.TFRecordDataset(input_file)
         if is_training:
             d = d.repeat()
-            d = d.shuffle(buffer_size=100)
+            d = d.shuffle(buffer_size=100000)
 
         d = d.apply(
             tf.contrib.data.map_and_batch(
@@ -432,10 +426,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
         label_ids = features["label_ids"]
-        if "is_real_example" in features:
-            is_real_example = tf.cast(features["is_real_example"], dtype=tf.float32)
-        else:
-            is_real_example = tf.ones(tf.shape(label_ids), dtype=tf.float32)
 
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
@@ -470,11 +460,11 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 train_op=train_op)
         elif mode == tf.estimator.ModeKeys.EVAL:
 
-            def metric_fn(per_example_loss, label_ids, logits, is_real_example):
+            def metric_fn(per_example_loss, label_ids, logits):
                 predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
                 accuracy = tf.metrics.accuracy(
-                    labels=label_ids, predictions=predictions, weights=is_real_example)
-                loss = tf.metrics.mean(values=per_example_loss, weights=is_real_example)
+                    labels=label_ids, predictions=predictions)
+                loss = tf.metrics.mean(values=per_example_loss)
                 return {
                     "eval_accuracy": accuracy,
                     "eval_loss": loss,
@@ -483,7 +473,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             output_spec = tf.estimator.EstimatorSpec(
                 mode=mode,
                 loss=total_loss,
-                eval_metric_ops=metric_fn(per_example_loss, label_ids, logits, is_real_example))
+                eval_metric_ops=metric_fn(per_example_loss, label_ids, logits))
         else:
             output_spec = tf.estimator.EstimatorSpec(
                 mode=mode,
